@@ -5,15 +5,14 @@
 -- Auth: AWS Cognito User Pool. This DB stores app profile & business data;
 --       passwords and primary identity live in Cognito (link via cognito_sub).
 --
--- NOT in this file (other stores from architecture):
+-- NOT in this file:
 --   • DynamoDB — courier_locations, order_events (high-throughput append log)
 --   • MongoDB  — sessions, catalog_cache, active_orders cache
+--   • AI/knowledge base (pgvector) — see schema_knowledge.sql (later)
 -- =============================================================================
 
 -- Extensions
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE EXTENSION IF NOT EXISTS "citext";
-CREATE EXTENSION IF NOT EXISTS "vector";
 
 -- =============================================================================
 -- ENUMS
@@ -76,19 +75,6 @@ CREATE TYPE notification_status AS ENUM (
   'SKIPPED'
 );
 
-CREATE TYPE ai_provider AS ENUM (
-  'bedrock',
-  'openai'
-);
-
-CREATE TYPE knowledge_source_type AS ENUM (
-  'faq',
-  'menu',
-  'policy',
-  'restaurant_info',
-  'guide'
-);
-
 -- =============================================================================
 -- USERS & PROFILES (Cognito-linked)
 -- =============================================================================
@@ -129,7 +115,7 @@ CREATE TABLE profiles (
   display_name         text,
   avatar_url           text,
   preferred_language   text NOT NULL DEFAULT 'tr',
-  dietary_preferences  jsonb NOT NULL DEFAULT '{}',  -- allergens, vegetarian, etc. (AI chat context)
+  dietary_preferences  jsonb NOT NULL DEFAULT '{}',  -- allergens, vegetarian, etc.
   notification_prefs   jsonb NOT NULL DEFAULT '{"sms": true, "email": true, "push": true}',
   created_at           timestamptz NOT NULL DEFAULT now(),
   updated_at           timestamptz NOT NULL DEFAULT now()
@@ -424,45 +410,7 @@ CREATE TABLE analytics_daily_venue_stats (
 CREATE INDEX idx_analytics_daily_venue_date ON analytics_daily_venue_stats (stat_date DESC);
 
 -- =============================================================================
--- AI CHAT & KNOWLEDGE BASE (pgvector RAG)
--- =============================================================================
-
-CREATE TABLE ai_config (
-  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  provider     ai_provider NOT NULL,
-  model_id     text NOT NULL,
-  temperature  float NOT NULL DEFAULT 0.7,
-  max_tokens   int NOT NULL DEFAULT 600,
-  rag_enabled  boolean NOT NULL DEFAULT true,
-  rag_top_k    int NOT NULL DEFAULT 5,
-  is_active    boolean NOT NULL DEFAULT true,
-  updated_at   timestamptz NOT NULL DEFAULT now(),
-  updated_by   uuid REFERENCES users (id)
-);
-
--- Single active config row enforced in application layer (or partial unique index)
-CREATE UNIQUE INDEX idx_ai_config_active ON ai_config (is_active) WHERE is_active = true;
-
-CREATE TABLE knowledge_chunks (
-  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  content     text NOT NULL,
-  embedding   vector(1536),
-  source_type knowledge_source_type NOT NULL,
-  source_id   text,
-  metadata    jsonb NOT NULL DEFAULT '{}',
-  created_at  timestamptz NOT NULL DEFAULT now(),
-  updated_at  timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX idx_knowledge_chunks_source ON knowledge_chunks (source_type, source_id);
-
-CREATE INDEX idx_knowledge_chunks_embedding
-  ON knowledge_chunks
-  USING hnsw (embedding vector_cosine_ops)
-  WITH (m = 16, ef_construction = 64);
-
--- =============================================================================
--- updated_at helper (optional trigger)
+-- updated_at helper
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION set_updated_at()
