@@ -3,6 +3,8 @@ name: Flyway migrate
 # GitHub → Settings → Environments → SUPABASE → Secrets:
 #   DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASS
 # Supabase требует SSL (sslmode=require в JDBC URL).
+#
+# red-gate/flyway-action — репозиторий не существует; используем setup-flyway + CLI.
 
 on:
   push:
@@ -21,24 +23,24 @@ jobs:
     runs-on: ubuntu-latest
     environment: SUPABASE
 
+    env:
+      FLYWAY_URL: jdbc:postgresql://${{ secrets.DB_HOST }}:${{ secrets.DB_PORT }}/${{ secrets.DB_NAME }}?sslmode=require
+      FLYWAY_USER: ${{ secrets.DB_USER }}
+      FLYWAY_PASSWORD: ${{ secrets.DB_PASS }}
+      FLYWAY_LOCATIONS: filesystem:migrations
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Flyway info
-        uses: red-gate/flyway-action@v2
+      - name: Setup Flyway
+        uses: red-gate/setup-flyway@v3
         with:
-          url: jdbc:postgresql://${{ secrets.DB_HOST }}:${{ secrets.DB_PORT }}/${{ secrets.DB_NAME }}?sslmode=require
-          user: ${{ secrets.DB_USER }}
-          password: ${{ secrets.DB_PASS }}
-          locations: filesystem:migrations
-          command: info
+          edition: community
+          i-agree-to-the-eula: true
+
+      - name: Flyway info
+        run: flyway info
 
       - name: Flyway migrate
-        uses: red-gate/flyway-action@v2
-        with:
-          url: jdbc:postgresql://${{ secrets.DB_HOST }}:${{ secrets.DB_PORT }}/${{ secrets.DB_NAME }}?sslmode=require
-          user: ${{ secrets.DB_USER }}
-          password: ${{ secrets.DB_PASS }}
-          locations: filesystem:migrations
-          command: migrate
+        run: flyway migrate
