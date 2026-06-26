@@ -32,34 +32,50 @@ CREATE TYPE venue_type AS ENUM (
     'SHOP'
     );
 
+-- Order lifecycle.
+-- В ARCHITECTURE.md (§5) используются более короткие имена — маппинг:
+--   AWAITING_PAYMENT, AWAITING_RESTAURANT  →  PENDING
+--   RESTAURANT_ACCEPTED                    →  CONFIRMED
+--   PREPARING                              →  PREPARING
+--   READY_FOR_PICKUP                       →  READY
+--   PICKED_UP                              →  PICKED_UP
+--   EN_ROUTE                               →  ON_THE_WAY
+--   DELIVERED                              →  DELIVERED
+--   CANCELLED                              →  CANCELLED
+--   DELIVERY_FAILED                        →  FAILED
+-- PENDING в архитектуре объединяет «ждём оплату» и «ждём ресторан»; здесь разделено для ясности.
 CREATE TYPE order_status AS ENUM (
-    'PENDING',
-    'CONFIRMED',
-    'PREPARING',
-    'READY',
-    'PICKED_UP',
-    'ON_THE_WAY',
-    'DELIVERED',
-    'CANCELLED',
-    'FAILED'
+    'AWAITING_PAYMENT',      -- ARCHITECTURE: PENDING (до успешной оплаты)
+    'AWAITING_RESTAURANT',   -- ARCHITECTURE: PENDING (оплата прошла, ждём ресторан, §14 Step Functions: Wait for restaurant)
+    'RESTAURANT_ACCEPTED',   -- ARCHITECTURE: CONFIRMED (ресторан принял, order.confirmed)
+    'PREPARING',             -- ARCHITECTURE: PREPARING
+    'READY_FOR_PICKUP',      -- ARCHITECTURE: READY
+    'PICKED_UP',             -- ARCHITECTURE: PICKED_UP
+    'EN_ROUTE',              -- ARCHITECTURE: ON_THE_WAY
+    'DELIVERED',             -- ARCHITECTURE: DELIVERED
+    'CANCELLED',             -- ARCHITECTURE: CANCELLED
+    'DELIVERY_FAILED'        -- ARCHITECTURE: FAILED
     );
 
+-- Payment lifecycle (Payment Service, Stripe).
+-- CUSTOMER_ACTION_REQUIRED ≈ Stripe status requires_action (3D Secure и т.п.).
 CREATE TYPE payment_status AS ENUM (
-    'PENDING',
-    'REQUIRES_ACTION',
-    'SUCCEEDED',
-    'FAILED',
-    'REFUNDED',
-    'PARTIALLY_REFUNDED'
+    'PENDING',                      -- платёж создан, идёт обработка
+    'CUSTOMER_ACTION_REQUIRED',     -- Stripe requires_action: 3DS, подтверждение в банке
+    'SUCCEEDED',                    -- ARCHITECTURE: payment.confirmed
+    'FAILED',                       -- ARCHITECTURE: payment.failed
+    'REFUNDED',                     -- полный возврат (отмена заказа, §14 refund flow)
+    'PARTIALLY_REFUNDED'            -- частичный возврат
     );
 
+-- Статус предложения доставки конкретному курьеру (Delivery Service, Assignment Engine, §15).
 CREATE TYPE assignment_status AS ENUM (
-    'OFFERED',
-    'ACCEPTED',
-    'DECLINED',
-    'EXPIRED',
-    'COMPLETED',
-    'CANCELLED'
+    'OFFERED',    -- заказ предложен курьеру (nearest available courier)
+    'ACCEPTED',   -- курьер принял задачу
+    'DECLINED',   -- курьер отклонил
+    'EXPIRED',    -- курьер не ответил в срок
+    'COMPLETED',  -- доставка по этому назначению завершена
+    'CANCELLED'   -- назначение отменено (переназначение другому курьеру, §15 graceful shutdown)
     );
 
 CREATE TYPE notification_channel AS ENUM (
@@ -112,6 +128,8 @@ CREATE TABLE user_roles
     PRIMARY KEY (user_id, role)
 );
 
+
+-- 1:1 with users
 CREATE TABLE profiles
 (
     user_id             uuid PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
@@ -170,7 +188,6 @@ CREATE TABLE venues
     is_open       boolean     NOT NULL DEFAULT true,
     rating        numeric(3, 2) CHECK (rating IS NULL OR (rating >= 0 AND rating <= 5)),
     image_url     text,
-    opening_hours jsonb       NOT NULL DEFAULT '{}',
     created_at    timestamptz NOT NULL DEFAULT now(),
     updated_at    timestamptz NOT NULL DEFAULT now()
 );
@@ -179,6 +196,31 @@ CREATE INDEX idx_venues_owner_id ON venues (owner_id);
 CREATE INDEX idx_venues_type_open ON venues (venue_type, is_open);
 CREATE INDEX idx_venues_city ON venues (city);
 
+-- Расписание работы по дням недели (Catalog Service).
+-- day_of_week: ISO 8601 — 1 = понедельник, 7 = воскресенье.
+-- Выходной = нет строки для этого дня. Несколько интервалов в день — несколько строк (будущее: slot).
+CREATE TABLE venue_opening_hours
+(
+    id          uuid PRIMARY KEY     DEFAULT gen_random_uuid(),
+    venue_id    uuid        NOT NULL REFERENCES venues (id) ON DELETE CASCADE,
+    day_of_week smallint    NOT NULL CHECK (day_of_week BETWEEN 1 AND 7),
+    opens_at    time        NOT NULL,
+    closes_at   time        NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+
+    CHECK (closes_at > opens_at)
+);
+
+CREATE INDEX idx_venue_opening_hours_venue_id ON venue_opening_hours (venue_id);
+CREATE UNIQUE INDEX idx_venue_opening_hours_venue_day_opens
+    ON venue_opening_hours (venue_id, day_of_week, opens_at);
+
+COMMENT ON TABLE venue_opening_hours IS
+    'Часы работы заведения. is_open на venues — ручной переключатель «принимаем заказы сейчас»; '
+    'эта таблица — регулярное расписание для отображения и проверки «открыт ли по расписанию».';
+
+-- categories for menu_items (dishes).
 CREATE TABLE categories
 (
     id         uuid PRIMARY KEY     DEFAULT gen_random_uuid(),
@@ -201,7 +243,7 @@ CREATE TABLE menu_items
     description  text,
     price        numeric(10, 2) NOT NULL CHECK (price >= 0),
     currency     char(3)        NOT NULL DEFAULT 'TRY',
-    image_url    text,
+    -- image_url    text,  -- for future
     is_available boolean        NOT NULL DEFAULT true,
     allergens    text[]                  DEFAULT '{}',
     sort_order   int            NOT NULL DEFAULT 0,
@@ -216,6 +258,10 @@ CREATE INDEX idx_menu_items_available ON menu_items (venue_id, is_available);
 -- =============================================================================
 -- COURIERS & DELIVERY ASSIGNMENTS
 -- =============================================================================
+-- Delivery Service (§15): Assignment Engine ищет ближайшего свободного курьера
+-- после order.confirmed (RESTAURANT_ACCEPTED) и создаёт запись в assignments.
+-- Это не статус заказа, а связь «заказ ↔ курьер» и результат переговоров с курьером.
+-- Живой GPS курьера — в DynamoDB courier_locations, не здесь.
 
 CREATE TABLE couriers
 (
@@ -233,6 +279,8 @@ CREATE TABLE couriers
 
 CREATE INDEX idx_couriers_available ON couriers (is_available) WHERE is_available = true;
 
+-- Назначение курьера на заказ. Один заказ может иметь несколько записей,
+-- если первый курьер отказался и заказ переназначили (§15 reassignment).
 CREATE TABLE assignments
 (
     id           uuid PRIMARY KEY           DEFAULT gen_random_uuid(),
@@ -247,6 +295,10 @@ CREATE TABLE assignments
     UNIQUE (order_id, courier_id)
 );
 
+COMMENT ON TABLE assignments IS
+    'Delivery Service (§4.7, §15): назначение курьера на заказ. '
+    'Assignment Engine пишет сюда после order.confirmed; Stage State Machine обновляет при PICKED_UP→DELIVERED.';
+
 CREATE INDEX idx_assignments_courier_status ON assignments (courier_id, status);
 CREATE INDEX idx_assignments_order_id ON assignments (order_id);
 
@@ -260,7 +312,7 @@ CREATE TABLE orders
     customer_id                      uuid           NOT NULL REFERENCES users (id),
     venue_id                         uuid           NOT NULL REFERENCES venues (id),
     delivery_address_id              uuid           NOT NULL REFERENCES addresses (id),
-    status                           order_status   NOT NULL DEFAULT 'PENDING',
+    status                           order_status   NOT NULL DEFAULT 'AWAITING_PAYMENT',
     subtotal                         numeric(10, 2) NOT NULL CHECK (subtotal >= 0),
     delivery_fee                     numeric(10, 2) NOT NULL DEFAULT 0 CHECK (delivery_fee >= 0),
     total                            numeric(10, 2) NOT NULL CHECK (total >= 0),
@@ -326,7 +378,7 @@ CREATE TABLE payments
     idempotency_key text           NOT NULL UNIQUE, -- typically order_id
     status          payment_status NOT NULL DEFAULT 'PENDING',
     amount          numeric(10, 2) NOT NULL CHECK (amount >= 0),
-    currency        char(3)        NOT NULL DEFAULT 'TRY',
+    currency        char(3)        NOT NULL DEFAULT 'USD',
     failure_code    text,
     failure_message text,
     paid_at         timestamptz,
@@ -351,7 +403,9 @@ CREATE INDEX idx_payment_refunds_payment_id ON payment_refunds (payment_id);
 
 -- =============================================================================
 -- NOTIFICATIONS (audit log)
+-- by email\sms
 -- =============================================================================
+
 
 CREATE TABLE notification_log
 (
@@ -375,6 +429,8 @@ CREATE INDEX idx_notification_log_order_id ON notification_log (order_id);
 -- MONITORING & OPS
 -- =============================================================================
 
+-- Service Level Agreement
+-- Нормативы на переход из статуса в статус.
 CREATE TABLE sla_thresholds
 (
     id          uuid PRIMARY KEY      DEFAULT gen_random_uuid(),
@@ -387,13 +443,18 @@ CREATE TABLE sla_thresholds
     UNIQUE (from_status, to_status)
 );
 
--- Seed defaults from architecture §9
+-- SLA thresholds (Monitoring Service, §9). Статусы — локальные имена; в §9 архитектуры:
+--   AWAITING_RESTAURANT → RESTAURANT_ACCEPTED  =  PENDING → CONFIRMED (5 min)
+--   RESTAURANT_ACCEPTED → READY_FOR_PICKUP     =  CONFIRMED → READY (30 min)
+--   READY_FOR_PICKUP → PICKED_UP               =  READY → PICKED_UP (15 min)
+--   PICKED_UP → DELIVERED                      =  PICKED_UP → DELIVERED (60 min)
 INSERT INTO sla_thresholds (from_status, to_status, max_minutes)
-VALUES ('PENDING', 'CONFIRMED', 5),
-       ('CONFIRMED', 'READY', 30),
-       ('READY', 'PICKED_UP', 15),
+VALUES ('AWAITING_RESTAURANT', 'RESTAURANT_ACCEPTED', 5),
+       ('RESTAURANT_ACCEPTED', 'READY_FOR_PICKUP', 30),
+       ('READY_FOR_PICKUP', 'PICKED_UP', 15),
        ('PICKED_UP', 'DELIVERED', 60);
 
+-- inbox проблем для ops-команды (админы, диспетчеры).
 CREATE TABLE ops_alerts
 (
     id          uuid PRIMARY KEY     DEFAULT gen_random_uuid(),
@@ -465,6 +526,12 @@ EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_venues_updated_at
     BEFORE UPDATE
     ON venues
+    FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_venue_opening_hours_updated_at
+    BEFORE UPDATE
+    ON venue_opening_hours
     FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
