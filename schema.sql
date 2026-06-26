@@ -443,7 +443,7 @@ CREATE TABLE sla_thresholds
     UNIQUE (from_status, to_status)
 );
 
--- SLA thresholds (Monitoring Service, §9). Статусы — локальные имена; в §9 архитектуры:
+-- SLA thresholds(Monitoring Service, §9). Статусы — локальные имена; в §9 архитектуры:
 --   AWAITING_RESTAURANT → RESTAURANT_ACCEPTED  =  PENDING → CONFIRMED (5 min)
 --   RESTAURANT_ACCEPTED → READY_FOR_PICKUP     =  CONFIRMED → READY (30 min)
 --   READY_FOR_PICKUP → PICKED_UP               =  READY → PICKED_UP (15 min)
