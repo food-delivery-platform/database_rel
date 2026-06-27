@@ -92,7 +92,7 @@ CREATE TYPE notification_status AS ENUM (
     );
 
 -- =============================================================================
--- USERS & PROFILES (Cognito-linked)
+-- USERS (Cognito-linked)
 -- =============================================================================
 
 -- Local mirror of Cognito users. Created/updated on first login or post-confirmation trigger.
@@ -103,6 +103,8 @@ CREATE TABLE users
     cognito_sub   text        NOT NULL UNIQUE,
     email         citext,
     phone         text,
+    display_name  text,
+    avatar_url    text,
     role          user_role   NOT NULL DEFAULT 'CUSTOMER',
     is_active     boolean     NOT NULL DEFAULT true,
     created_at    timestamptz NOT NULL DEFAULT now(),
@@ -116,23 +118,6 @@ COMMENT ON TABLE users IS
     'App user record linked to AWS Cognito via cognito_sub. Auth tokens issued by Cognito; no password stored here.';
 COMMENT ON COLUMN users.cognito_sub IS 'Cognito User Pool "sub" claim — primary identity key';
 COMMENT ON COLUMN users.role IS 'Единственная роль пользователя (RBAC); должна совпадать с группой в Cognito';
-
--- 1:1 with users
-CREATE TABLE profiles
-(
-    user_id             uuid PRIMARY KEY REFERENCES users (id) ON DELETE CASCADE,
-    display_name        text,
-    avatar_url          text,
-    preferred_language  text        NOT NULL DEFAULT 'tr',
-    dietary_preferences jsonb       NOT NULL DEFAULT '{}', -- allergens, vegetarian, etc.
-    notification_prefs  jsonb       NOT NULL DEFAULT '{
-      "sms": true,
-      "email": true,
-      "push": true
-    }',
-    created_at          timestamptz NOT NULL DEFAULT now(),
-    updated_at          timestamptz NOT NULL DEFAULT now()
-);
 
 CREATE TABLE addresses
 (
@@ -496,12 +481,6 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_users_updated_at
     BEFORE UPDATE
     ON users
-    FOR EACH ROW
-EXECUTE FUNCTION set_updated_at();
-
-CREATE TRIGGER trg_profiles_updated_at
-    BEFORE UPDATE
-    ON profiles
     FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
 
