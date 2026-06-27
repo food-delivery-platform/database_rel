@@ -64,8 +64,7 @@ CREATE TYPE payment_status AS ENUM (
     'CUSTOMER_ACTION_REQUIRED',     -- Stripe requires_action: 3DS, bank confirmation
     'SUCCEEDED',                    -- ARCHITECTURE: payment.confirmed
     'FAILED',                       -- ARCHITECTURE: payment.failed
-    'REFUNDED',                     -- full refund (order cancellation, §14 refund flow)
-    'PARTIALLY_REFUNDED'            -- partial refund
+    'REFUNDED'                     -- full refund (order cancellation, §14 refund flow)
     );
 
 -- Status of a delivery offer to a specific courier (Delivery Service, Assignment Engine, §15).
