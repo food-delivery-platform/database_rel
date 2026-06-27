@@ -218,7 +218,7 @@ CREATE TABLE menu_items
     price        numeric(10, 2) NOT NULL CHECK (price >= 0),
     currency     char(3)        NOT NULL DEFAULT 'TRY',
     -- image_url    text,  -- for future
-    is_available boolean        NOT NULL DEFAULT true,
+    is_active    boolean        NOT NULL DEFAULT true,
     allergens    text[]                  DEFAULT '{}',
     sort_order   int            NOT NULL DEFAULT 0,
     created_at   timestamptz    NOT NULL DEFAULT now(),
@@ -227,7 +227,10 @@ CREATE TABLE menu_items
 
 CREATE INDEX idx_menu_items_venue_id ON menu_items (venue_id);
 CREATE INDEX idx_menu_items_category_id ON menu_items (category_id);
-CREATE INDEX idx_menu_items_available ON menu_items (venue_id, is_available);
+CREATE INDEX idx_menu_items_active ON menu_items (venue_id, is_active);
+
+COMMENT ON COLUMN menu_items.is_active IS
+    'Whether the dish is offered for sale at this venue at all (catalog listing, not day-to-day stock).';
 
 -- =============================================================================
 -- COURIERS & DELIVERY ASSIGNMENTS
