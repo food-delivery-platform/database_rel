@@ -138,6 +138,7 @@ CREATE TABLE addresses
 );
 
 CREATE INDEX idx_addresses_user_id ON addresses (user_id);
+CREATE INDEX idx_addresses_city ON addresses (city);
 
 -- =============================================================================
 -- CATALOG (restaurants + shops)
@@ -146,28 +147,29 @@ CREATE INDEX idx_addresses_user_id ON addresses (user_id);
 -- Unified venue: 300 restaurants + 10 000 shops (architecture scale)
 CREATE TABLE venues
 (
-    id            uuid PRIMARY KEY     DEFAULT gen_random_uuid(),
-    owner_id      uuid        NOT NULL REFERENCES users (id),
-    venue_type    venue_type  NOT NULL,
-    name          text        NOT NULL,
-    slug          text UNIQUE,
-    description   text,
-    address_line1 text        NOT NULL,
-    address_line2 text,
-    city          text        NOT NULL,
-    latitude      numeric(10, 7),
-    longitude     numeric(10, 7),
-    cuisine_tags  text[]               DEFAULT '{}',
-    is_open       boolean     NOT NULL DEFAULT true,
-    rating        numeric(3, 2) CHECK (rating IS NULL OR (rating >= 0 AND rating <= 5)),
-    image_url     text,
-    created_at    timestamptz NOT NULL DEFAULT now(),
-    updated_at    timestamptz NOT NULL DEFAULT now()
+    id          uuid PRIMARY KEY     DEFAULT gen_random_uuid(),
+    owner_id    uuid        NOT NULL REFERENCES users (id),
+    address_id  uuid        NOT NULL REFERENCES addresses (id),
+    venue_type  venue_type  NOT NULL,
+    name        text        NOT NULL,
+    slug        text UNIQUE,
+    description text,
+    cuisine_tags text[]              DEFAULT '{}',
+    is_open     boolean     NOT NULL DEFAULT true,
+    rating      numeric(3, 2) CHECK (rating IS NULL OR (rating >= 0 AND rating <= 5)),
+    image_url   text,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+
+    UNIQUE (address_id)
 );
 
+COMMENT ON COLUMN venues.address_id IS
+    'Физический адрес заведения; строка в addresses, обычно user_id = owner_id';
+
 CREATE INDEX idx_venues_owner_id ON venues (owner_id);
+CREATE INDEX idx_venues_address_id ON venues (address_id);
 CREATE INDEX idx_venues_type_open ON venues (venue_type, is_open);
-CREATE INDEX idx_venues_city ON venues (city);
 
 -- Расписание работы по дням недели (Catalog Service).
 -- day_of_week: ISO 8601 — 1 = понедельник, 7 = воскресенье.
