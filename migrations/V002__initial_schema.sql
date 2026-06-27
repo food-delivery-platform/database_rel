@@ -233,12 +233,9 @@ COMMENT ON COLUMN menu_items.is_active IS
     'Whether the dish is offered for sale at this venue at all (catalog listing, not day-to-day stock).';
 
 -- =============================================================================
--- COURIERS & DELIVERY ASSIGNMENTS
+-- COURIERS
 -- =============================================================================
--- Delivery Service (§15): Assignment Engine finds the nearest available courier
--- after order.confirmed (RESTAURANT_ACCEPTED) and creates a row in assignments.
--- This is not an order status, but the order ↔ courier link and outcome of courier negotiation.
--- Live courier GPS is in DynamoDB courier_locations, not here.
+-- Delivery Service (§15): live GPS → DynamoDB courier_locations.
 
 CREATE TABLE couriers
 (
@@ -246,7 +243,6 @@ CREATE TABLE couriers
     user_id          uuid        NOT NULL UNIQUE REFERENCES users (id) ON DELETE CASCADE,
     vehicle_type     text        NOT NULL DEFAULT 'bicycle', -- bicycle, scooter, car
     is_available     boolean     NOT NULL DEFAULT false,
-    is_verified      boolean     NOT NULL DEFAULT false,
     last_lat         numeric(10, 7),                         -- coarse position; live GPS stream → DynamoDB
     last_lng         numeric(10, 7),
     last_location_at timestamptz,
