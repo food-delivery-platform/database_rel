@@ -67,16 +67,6 @@ CREATE TYPE payment_status AS ENUM (
     'REFUNDED'                     -- full refund (order cancellation, §14 refund flow)
     );
 
--- Status of a delivery offer to a specific courier (Delivery Service, Assignment Engine, §15).
-CREATE TYPE assignment_status AS ENUM (
-    'OFFERED',    -- order offered to courier (nearest available courier)
-    'ACCEPTED',   -- courier accepted the task
-    'DECLINED',   -- courier declined
-    'EXPIRED',    -- courier did not respond in time
-    'COMPLETED',  -- delivery for this assignment completed
-    'CANCELLED'   -- assignment cancelled (reassigned to another courier, §15 graceful shutdown)
-    );
-
 CREATE TYPE notification_channel AS ENUM (
     'SMS',
     'EMAIL',
@@ -252,29 +242,6 @@ CREATE TABLE couriers
 
 CREATE INDEX idx_couriers_available ON couriers (is_available) WHERE is_available = true;
 
--- Courier assignment to an order. One order may have multiple rows
--- if the first courier declined and the order was reassigned (§15 reassignment).
-CREATE TABLE assignments
-(
-    id           uuid PRIMARY KEY           DEFAULT gen_random_uuid(),
-    order_id     uuid              NOT NULL, -- FK added after orders table
-    courier_id   uuid              NOT NULL REFERENCES couriers (id),
-    status       assignment_status NOT NULL DEFAULT 'OFFERED',
-    offered_at   timestamptz       NOT NULL DEFAULT now(),
-    accepted_at  timestamptz,
-    completed_at timestamptz,
-    cancelled_at timestamptz,
-
-    UNIQUE (order_id, courier_id)
-);
-
-COMMENT ON TABLE assignments IS
-    'Delivery Service (§4.7, §15): courier assignment to an order. '
-    'Assignment Engine writes here after order.confirmed; Stage State Machine updates on PICKED_UP→DELIVERED.';
-
-CREATE INDEX idx_assignments_courier_status ON assignments (courier_id, status);
-CREATE INDEX idx_assignments_order_id ON assignments (order_id);
-
 -- =============================================================================
 -- ORDERS
 -- =============================================================================
@@ -285,6 +252,7 @@ CREATE TABLE orders
     customer_id                      uuid           NOT NULL REFERENCES users (id),
     venue_id                         uuid           NOT NULL REFERENCES venues (id),
     delivery_address_id              uuid           NOT NULL REFERENCES addresses (id),
+    courier_id                       uuid           REFERENCES couriers (id),
     status                           order_status   NOT NULL DEFAULT 'AWAITING_PAYMENT',
     subtotal                         numeric(10, 2) NOT NULL CHECK (subtotal >= 0),
     delivery_fee                     numeric(10, 2) NOT NULL DEFAULT 0 CHECK (delivery_fee >= 0),
@@ -298,12 +266,12 @@ CREATE TABLE orders
     updated_at                       timestamptz    NOT NULL DEFAULT now()
 );
 
-ALTER TABLE assignments
-    ADD CONSTRAINT assignments_order_id_fkey
-        FOREIGN KEY (order_id) REFERENCES orders (id) ON DELETE CASCADE;
+COMMENT ON COLUMN orders.courier_id IS
+    'Текущий курьер на заказе; назначение и смена — в order_status_history (actor_id, actor_type=COURIER)';
 
 CREATE INDEX idx_orders_customer_id ON orders (customer_id);
 CREATE INDEX idx_orders_venue_id ON orders (venue_id);
+CREATE INDEX idx_orders_courier_id ON orders (courier_id);
 CREATE INDEX idx_orders_status ON orders (status);
 CREATE INDEX idx_orders_created_at ON orders (created_at DESC);
 
