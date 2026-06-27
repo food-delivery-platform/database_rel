@@ -30,3 +30,8 @@ COMMENT ON COLUMN notification_log.event_id IS
 ALTER TABLE menu_items ALTER COLUMN currency SET DEFAULT 'USD';
 ALTER TABLE orders ALTER COLUMN currency SET DEFAULT 'USD';
 ALTER TABLE payments ALTER COLUMN currency SET DEFAULT 'USD';
+
+-- venues.venue_type removed; restaurant vs shop is inferred from owner users.role if needed.
+DROP INDEX IF EXISTS idx_venues_type_open;
+ALTER TABLE venues DROP COLUMN IF EXISTS venue_type;
+DROP TYPE IF EXISTS venue_type;
