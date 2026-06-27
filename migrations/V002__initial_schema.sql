@@ -115,19 +115,7 @@ CREATE TABLE users
 COMMENT ON TABLE users IS
     'App user record linked to AWS Cognito via cognito_sub. Auth tokens issued by Cognito; no password stored here.';
 COMMENT ON COLUMN users.cognito_sub IS 'Cognito User Pool "sub" claim — primary identity key';
-COMMENT ON COLUMN users.role IS 'Primary RBAC role; should align with Cognito group membership';
-
--- Optional: multiple roles per user (e.g. ADMIN who is also CUSTOMER)
-CREATE TABLE user_roles
-(
-    user_id    uuid        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
-    role       user_role   NOT NULL,
-    granted_at timestamptz NOT NULL DEFAULT now(),
-    granted_by uuid REFERENCES users (id),
-
-    PRIMARY KEY (user_id, role)
-);
-
+COMMENT ON COLUMN users.role IS 'Единственная роль пользователя (RBAC); должна совпадать с группой в Cognito';
 
 -- 1:1 with users
 CREATE TABLE profiles
