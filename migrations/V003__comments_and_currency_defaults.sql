@@ -35,3 +35,5 @@ ALTER TABLE payments ALTER COLUMN currency SET DEFAULT 'USD';
 DROP INDEX IF EXISTS idx_venues_type_open;
 ALTER TABLE venues DROP COLUMN IF EXISTS venue_type;
 DROP TYPE IF EXISTS venue_type;
+
+ALTER TABLE menu_items RENAME COLUMN allergens TO ingredients;
