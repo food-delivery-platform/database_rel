@@ -283,7 +283,7 @@ CREATE TABLE order_items
     menu_item_id         uuid           NOT NULL REFERENCES menu_items (id),
     quantity             int            NOT NULL CHECK (quantity > 0),
     unit_price           numeric(10, 2) NOT NULL CHECK (unit_price >= 0),
-    line_total           numeric(10, 2) NOT NULL CHECK (line_total >= 0),
+    line_total           numeric(10, 2) GENERATED ALWAYS AS (unit_price * quantity) STORED,
     special_instructions text,
     menu_item_name       text           NOT NULL, -- snapshot
     created_at           timestamptz    NOT NULL DEFAULT now()
