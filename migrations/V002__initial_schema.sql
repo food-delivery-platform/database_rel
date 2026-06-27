@@ -33,7 +33,7 @@ CREATE TYPE venue_type AS ENUM (
     );
 
 -- Order lifecycle.
--- В ARCHITECTURE.md (§5) используются более короткие имена — маппинг:
+-- ARCHITECTURE.md (§5) uses shorter names — mapping:
 --   AWAITING_PAYMENT, AWAITING_RESTAURANT  →  PENDING
 --   RESTAURANT_ACCEPTED                    →  CONFIRMED
 --   PREPARING                              →  PREPARING
@@ -43,11 +43,11 @@ CREATE TYPE venue_type AS ENUM (
 --   DELIVERED                              →  DELIVERED
 --   CANCELLED                              →  CANCELLED
 --   DELIVERY_FAILED                        →  FAILED
--- PENDING в архитектуре объединяет «ждём оплату» и «ждём ресторан»; здесь разделено для ясности.
+-- In the architecture, PENDING combines "awaiting payment" and "awaiting restaurant"; split here for clarity.
 CREATE TYPE order_status AS ENUM (
-    'AWAITING_PAYMENT',      -- ARCHITECTURE: PENDING (до успешной оплаты)
-    'AWAITING_RESTAURANT',   -- ARCHITECTURE: PENDING (оплата прошла, ждём ресторан, §14 Step Functions: Wait for restaurant)
-    'RESTAURANT_ACCEPTED',   -- ARCHITECTURE: CONFIRMED (ресторан принял, order.confirmed)
+    'AWAITING_PAYMENT',      -- ARCHITECTURE: PENDING (until payment succeeds)
+    'AWAITING_RESTAURANT',   -- ARCHITECTURE: PENDING (payment succeeded, awaiting restaurant, §14 Step Functions: Wait for restaurant)
+    'RESTAURANT_ACCEPTED',   -- ARCHITECTURE: CONFIRMED (restaurant accepted, order.confirmed)
     'PREPARING',             -- ARCHITECTURE: PREPARING
     'READY_FOR_PICKUP',      -- ARCHITECTURE: READY
     'PICKED_UP',             -- ARCHITECTURE: PICKED_UP
@@ -58,24 +58,24 @@ CREATE TYPE order_status AS ENUM (
     );
 
 -- Payment lifecycle (Payment Service, Stripe).
--- CUSTOMER_ACTION_REQUIRED ≈ Stripe status requires_action (3D Secure и т.п.).
+-- CUSTOMER_ACTION_REQUIRED ≈ Stripe status requires_action (3D Secure, etc.).
 CREATE TYPE payment_status AS ENUM (
-    'PENDING',                      -- платёж создан, идёт обработка
-    'CUSTOMER_ACTION_REQUIRED',     -- Stripe requires_action: 3DS, подтверждение в банке
+    'PENDING',                      -- payment created, processing in progress
+    'CUSTOMER_ACTION_REQUIRED',     -- Stripe requires_action: 3DS, bank confirmation
     'SUCCEEDED',                    -- ARCHITECTURE: payment.confirmed
     'FAILED',                       -- ARCHITECTURE: payment.failed
-    'REFUNDED',                     -- полный возврат (отмена заказа, §14 refund flow)
-    'PARTIALLY_REFUNDED'            -- частичный возврат
+    'REFUNDED',                     -- full refund (order cancellation, §14 refund flow)
+    'PARTIALLY_REFUNDED'            -- partial refund
     );
 
--- Статус предложения доставки конкретному курьеру (Delivery Service, Assignment Engine, §15).
+-- Status of a delivery offer to a specific courier (Delivery Service, Assignment Engine, §15).
 CREATE TYPE assignment_status AS ENUM (
-    'OFFERED',    -- заказ предложен курьеру (nearest available courier)
-    'ACCEPTED',   -- курьер принял задачу
-    'DECLINED',   -- курьер отклонил
-    'EXPIRED',    -- курьер не ответил в срок
-    'COMPLETED',  -- доставка по этому назначению завершена
-    'CANCELLED'   -- назначение отменено (переназначение другому курьеру, §15 graceful shutdown)
+    'OFFERED',    -- order offered to courier (nearest available courier)
+    'ACCEPTED',   -- courier accepted the task
+    'DECLINED',   -- courier declined
+    'EXPIRED',    -- courier did not respond in time
+    'COMPLETED',  -- delivery for this assignment completed
+    'CANCELLED'   -- assignment cancelled (reassigned to another courier, §15 graceful shutdown)
     );
 
 CREATE TYPE notification_channel AS ENUM (
@@ -117,7 +117,7 @@ CREATE TABLE users
 COMMENT ON TABLE users IS
     'App user record linked to AWS Cognito via cognito_sub. Auth tokens issued by Cognito; no password stored here.';
 COMMENT ON COLUMN users.cognito_sub IS 'Cognito User Pool "sub" claim — primary identity key';
-COMMENT ON COLUMN users.role IS 'Единственная роль пользователя (RBAC); должна совпадать с группой в Cognito';
+COMMENT ON COLUMN users.role IS 'Single user role (RBAC); must match Cognito group';
 
 CREATE TABLE addresses
 (
@@ -165,15 +165,15 @@ CREATE TABLE venues
 );
 
 COMMENT ON COLUMN venues.address_id IS
-    'Физический адрес заведения; строка в addresses, обычно user_id = owner_id';
+    'Physical venue address; row in addresses, typically user_id = owner_id';
 
 CREATE INDEX idx_venues_owner_id ON venues (owner_id);
 CREATE INDEX idx_venues_address_id ON venues (address_id);
 CREATE INDEX idx_venues_type_open ON venues (venue_type, is_open);
 
--- Расписание работы по дням недели (Catalog Service).
--- day_of_week: ISO 8601 — 1 = понедельник, 7 = воскресенье.
--- Выходной = нет строки для этого дня. Несколько интервалов в день — несколько строк (будущее: slot).
+-- Weekly opening hours schedule (Catalog Service).
+-- day_of_week: ISO 8601 — 1 = Monday, 7 = Sunday.
+-- Closed day = no row for that day. Multiple intervals per day = multiple rows (future: slot).
 CREATE TABLE venue_opening_hours
 (
     id          uuid PRIMARY KEY     DEFAULT gen_random_uuid(),
@@ -192,8 +192,8 @@ CREATE UNIQUE INDEX idx_venue_opening_hours_venue_day_opens
     ON venue_opening_hours (venue_id, day_of_week, opens_at);
 
 COMMENT ON TABLE venue_opening_hours IS
-    'Часы работы заведения. is_open на venues — ручной переключатель «принимаем заказы сейчас»; '
-    'эта таблица — регулярное расписание для отображения и проверки «открыт ли по расписанию».';
+    'Venue opening hours. is_open on venues is a manual toggle for "accepting orders now"; '
+    'this table is the regular schedule for display and checking whether the venue is open by schedule.';
 
 -- categories for menu_items (dishes).
 CREATE TABLE categories
@@ -233,10 +233,10 @@ CREATE INDEX idx_menu_items_available ON menu_items (venue_id, is_available);
 -- =============================================================================
 -- COURIERS & DELIVERY ASSIGNMENTS
 -- =============================================================================
--- Delivery Service (§15): Assignment Engine ищет ближайшего свободного курьера
--- после order.confirmed (RESTAURANT_ACCEPTED) и создаёт запись в assignments.
--- Это не статус заказа, а связь «заказ ↔ курьер» и результат переговоров с курьером.
--- Живой GPS курьера — в DynamoDB courier_locations, не здесь.
+-- Delivery Service (§15): Assignment Engine finds the nearest available courier
+-- after order.confirmed (RESTAURANT_ACCEPTED) and creates a row in assignments.
+-- This is not an order status, but the order ↔ courier link and outcome of courier negotiation.
+-- Live courier GPS is in DynamoDB courier_locations, not here.
 
 CREATE TABLE couriers
 (
@@ -254,8 +254,8 @@ CREATE TABLE couriers
 
 CREATE INDEX idx_couriers_available ON couriers (is_available) WHERE is_available = true;
 
--- Назначение курьера на заказ. Один заказ может иметь несколько записей,
--- если первый курьер отказался и заказ переназначили (§15 reassignment).
+-- Courier assignment to an order. One order may have multiple rows
+-- if the first courier declined and the order was reassigned (§15 reassignment).
 CREATE TABLE assignments
 (
     id           uuid PRIMARY KEY           DEFAULT gen_random_uuid(),
@@ -271,8 +271,8 @@ CREATE TABLE assignments
 );
 
 COMMENT ON TABLE assignments IS
-    'Delivery Service (§4.7, §15): назначение курьера на заказ. '
-    'Assignment Engine пишет сюда после order.confirmed; Stage State Machine обновляет при PICKED_UP→DELIVERED.';
+    'Delivery Service (§4.7, §15): courier assignment to an order. '
+    'Assignment Engine writes here after order.confirmed; Stage State Machine updates on PICKED_UP→DELIVERED.';
 
 CREATE INDEX idx_assignments_courier_status ON assignments (courier_id, status);
 CREATE INDEX idx_assignments_order_id ON assignments (order_id);
@@ -405,7 +405,7 @@ CREATE INDEX idx_notification_log_order_id ON notification_log (order_id);
 -- =============================================================================
 
 -- Service Level Agreement
--- Нормативы на переход из статуса в статус.
+-- Thresholds for status-to-status transitions.
 CREATE TABLE sla_thresholds
 (
     id          uuid PRIMARY KEY      DEFAULT gen_random_uuid(),
@@ -418,7 +418,7 @@ CREATE TABLE sla_thresholds
     UNIQUE (from_status, to_status)
 );
 
--- SLA thresholds(Monitoring Service, §9). Статусы — локальные имена; в §9 архитектуры:
+-- SLA thresholds (Monitoring Service, §9). Statuses use local names; in architecture §9:
 --   AWAITING_RESTAURANT → RESTAURANT_ACCEPTED  =  PENDING → CONFIRMED (5 min)
 --   RESTAURANT_ACCEPTED → READY_FOR_PICKUP     =  CONFIRMED → READY (30 min)
 --   READY_FOR_PICKUP → PICKED_UP               =  READY → PICKED_UP (15 min)
@@ -429,7 +429,7 @@ VALUES ('AWAITING_RESTAURANT', 'RESTAURANT_ACCEPTED', 5),
        ('READY_FOR_PICKUP', 'PICKED_UP', 15),
        ('PICKED_UP', 'DELIVERED', 60);
 
--- inbox проблем для ops-команды (админы, диспетчеры).
+-- Problem inbox for the ops team (admins, dispatchers).
 CREATE TABLE ops_alerts
 (
     id          uuid PRIMARY KEY     DEFAULT gen_random_uuid(),
